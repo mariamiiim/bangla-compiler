@@ -31,6 +31,9 @@ public:
 
     // Returns a pointer to the symbol info, or nullptr if not found.
     const SymbolInfo* lookup(const std::string& name) const;
+
+    // Read-only access to all entries (used to print the table).
+    const std::unordered_map<std::string, SymbolInfo>& all() const { return symbols; }
 };
 
 // Maps the source-level type keyword (সংখ্যা / লেখা) to a SymbolType.
