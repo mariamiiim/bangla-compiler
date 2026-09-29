@@ -1,8 +1,125 @@
 #include "parser.h"
 #include <iostream>
 #include <cstdlib>
+#include <algorithm>
 
 using namespace std;
+
+// ============================================================
+// Complete formal grammar in BNF (Backus-Naur Form)
+// implemented by this recursive-descent parser + the lexer
+// ============================================================
+//
+// Notation: <name> = non-terminal, "text" = terminal (literal token),
+//           ::= means "is defined as", | means "or",
+//           ε   = the empty string.
+// Only pure BNF is used (no *, +, [ ], ( ) shorthand); repetition is
+// written with recursion.
+//
+// ------------------------------------------------------------
+// PART 1 : SYNTAX GRAMMAR  (rules used by the parser)
+// ------------------------------------------------------------
+//
+// <program>        ::= <eols> <statement_list>
+//
+// <statement_list> ::= ε
+//                    | <statement> <eols> <statement_list>
+//
+// <eols>           ::= ε
+//                    | END_OF_LINE <eols>
+//
+// <statement>      ::= <declaration>
+//                    | <assignment>
+//                    | <show>
+//                    | <if_stmt>
+//                    | <while_stmt>
+//
+// <declaration>    ::= "ধরি" <type> IDENTIFIER "<-" <expression> ";"
+// <type>           ::= "সংখ্যা"
+//                    | "লেখা"
+// <assignment>     ::= IDENTIFIER "<-" <expression> ";"
+// <show>           ::= "দেখাও" <expression> ";"
+//
+// <if_stmt>        ::= "যদি" <condition> "তবে" <block> "শেষ"
+//                    | "যদি" <condition> "তবে" <block> "নাহলে" <block> "শেষ"
+//
+// <while_stmt>     ::= "যতক্ষণ" <condition> "করো" <block> "শেষ"
+//
+// <block>          ::= <eols> <statement_list>
+//
+// <condition>      ::= <expression> <relop> <expression>
+// <relop>          ::= "==" | "!=" | ">" | "<" | ">=" | "<="
+//
+// <expression>     ::= <term>
+//                    | <expression> "+" <term>
+//                    | <expression> "-" <term>
+//
+// <term>           ::= <factor>
+//                    | <term> "*" <factor>
+//                    | <term> "/" <factor>
+//                    | <term> "%" <factor>
+//
+// <factor>         ::= NUMBER
+//                    | STRING
+//                    | IDENTIFIER
+//                    | "(" <expression> ")"
+//
+// ------------------------------------------------------------
+// PART 2 : LEXICAL GRAMMAR  (rules used by the lexer to form tokens)
+// ------------------------------------------------------------
+//
+// NUMBER           ::= <digit> | <digit> NUMBER
+// <digit>          ::= "0" | "1" | "2" | "3" | "4"
+//                    | "5" | "6" | "7" | "8" | "9"
+//
+// IDENTIFIER       ::= <ascii_ident> | <word>
+// <ascii_ident>    ::= <ascii_letter> <ascii_rest>
+// <ascii_rest>     ::= ε
+//                    | <ascii_letter> <ascii_rest>
+//                    | <digit> <ascii_rest>
+// <ascii_letter>   ::= "A" | ... | "Z" | "a" | ... | "z" | "_"
+//
+// <word>           ::= <word_start> <word_rest>
+//                      (any Bangla/UTF-8 word that is NOT a keyword;
+//                       it ends at the first word terminator below)
+// <word_start>     ::= any character that is not an ASCII letter, digit,
+//                      operator, delimiter or whitespace
+// <word_rest>      ::= ε
+//                    | <word_char> <word_rest>
+// <word_char>      ::= any character that is not a <word_terminator>
+// <word_terminator>::= " " | TAB | CR | LF | "+" | "-" | "*" | "/" | "%"
+//                    | "<" | ">" | "=" | "!" | "\"" | "(" | ")"
+//                    | "{" | "}" | ";"
+//
+// STRING           ::= "\"" <string_chars> "\""
+// <string_chars>   ::= ε
+//                    | <string_char> <string_chars>
+// <string_char>    ::= any character except "\""
+//
+// END_OF_LINE      ::= LF
+//
+// <comment>        ::= "//" <comment_chars>      (skipped by the lexer)
+// <comment_chars>  ::= ε
+//                    | <non_lf_char> <comment_chars>
+// <non_lf_char>    ::= any character except LF
+//
+// Keywords (reserved words, cannot be used as identifiers):
+//   "ধরি"  "সংখ্যা"  "লেখা"  "দেখাও"  "যদি"  "তবে"  "নাহলে"
+//   "যতক্ষণ"  "করো"  "শেষ"
+//
+// Whitespace (space, TAB, CR) between tokens is ignored.
+// The tokens "{" and "}" are recognised by the lexer but are not
+// used by any rule of the current grammar.
+//
+// ------------------------------------------------------------
+// Notes
+// ------------------------------------------------------------
+//   - Operator precedence: "*" "/" "%" bind tighter than "+" "-".
+//   - Both levels are left-associative (left-recursive rules above;
+//     the parser implements them with loops).
+//   - A <block> ends at the parent's terminator keyword ("নাহলে" or
+//     "শেষ") or at end of file.
+// ============================================================
 
 Parser::Parser(const string& source)
     : lexer(source)
@@ -60,62 +177,62 @@ void Parser::skipEndOfLines()
     }
 }
 
-void Parser::parseProgram()
+Program Parser::parseProgram()
 {
     cout << "====================================" << endl;
     cout << "       বাংলা ভাষা - PARSER" << endl;
     cout << "====================================" << endl;
 
+    Program program;
+
     skipEndOfLines();
 
     while (!check(LexTokenType::END_OF_FILE))
     {
-        parseStatement();
+        program.statements.push_back(parseStatement());
         skipEndOfLines();
     }
 
     cout << endl;
     cout << "Parsing Successful!" << endl;
     cout << "No syntax errors found." << endl;
+
+    return program;
 }
 
-void Parser::parseStatement()
+StmtPtr Parser::parseStatement()
 {
     if (check(LexTokenType::KEYWORD) && checkValue("ধরি"))
     {
-        parseDeclaration();
-        return;
+        return parseDeclaration();
     }
 
     if (check(LexTokenType::KEYWORD) && checkValue("দেখাও"))
     {
-        parseShow();
-        return;
+        return parseShow();
     }
 
     if (check(LexTokenType::KEYWORD) && checkValue("যদি"))
     {
-        parseIf();
-        return;
+        return parseIf();
     }
 
     if (check(LexTokenType::KEYWORD) && checkValue("যতক্ষণ"))
     {
-        parseWhile();
-        return;
+        return parseWhile();
     }
 
     if (check(LexTokenType::IDENTIFIER))
     {
-        parseAssignment();
-        return;
+        return parseAssignment();
     }
 
     error("Invalid statement");
 }
 
-void Parser::parseDeclaration()
+StmtPtr Parser::parseDeclaration()
 {
+    int declLine = currentToken.line;
     expectKeyword("ধরি");
 
     if (!check(LexTokenType::KEYWORD) ||
@@ -133,117 +250,125 @@ void Parser::parseDeclaration()
     }
 
     string varName = currentToken.value;
-    int declLine = currentToken.line;
     advance();
-
-    if (symbolTable.exists(varName))
-    {
-        error("Variable already declared: " + varName);
-    }
 
     expect(LexTokenType::ASSIGN, "Expected '<-'");
 
-    parseExpression();
+    ExprPtr value = parseExpression();
 
     expect(LexTokenType::SEMICOLON, "Expected ';' after declaration");
 
-    symbolTable.declare(varName, symbolTypeFromKeyword(typeKeyword), declLine);
+    return make_shared<DeclarationStmt>(typeKeyword, varName, value, declLine);
 }
 
-void Parser::parseAssignment()
+StmtPtr Parser::parseAssignment()
 {
     if (!check(LexTokenType::IDENTIFIER))
     {
         error("Expected variable name");
     }
 
+    int stmtLine = currentToken.line;
     string varName = currentToken.value;
     advance();
 
-    if (!symbolTable.exists(varName))
-    {
-        error("Variable not declared before use: " + varName);
-    }
-
     expect(LexTokenType::ASSIGN, "Expected '<-'");
 
-    parseExpression();
+    ExprPtr value = parseExpression();
 
     expect(LexTokenType::SEMICOLON, "Expected ';' after assignment");
+
+    return make_shared<AssignmentStmt>(varName, value, stmtLine);
 }
 
-void Parser::parseShow()
+StmtPtr Parser::parseShow()
 {
+    int stmtLine = currentToken.line;
     expectKeyword("দেখাও");
 
-    parseExpression();
+    ExprPtr value = parseExpression();
 
     expect(LexTokenType::SEMICOLON, "Expected ';' after দেখাও");
+
+    return make_shared<ShowStmt>(value, stmtLine);
 }
 
-void Parser::parseIf()
+shared_ptr<BlockStmt> Parser::parseBlock(const vector<string>& terminatorKeywords)
 {
-    expectKeyword("যদি");
-
-    parseCondition();
-
-    expectKeyword("তবে");
+    int blockLine = currentToken.line;
+    vector<StmtPtr> statements;
 
     skipEndOfLines();
 
-    while (
-        !check(LexTokenType::END_OF_FILE) &&
-        !(check(LexTokenType::KEYWORD) &&
-          (checkValue("নাহলে") || checkValue("শেষ")))
-    )
+    auto atTerminator = [&]()
     {
-        parseStatement();
+        if (check(LexTokenType::END_OF_FILE))
+        {
+            return true;
+        }
+
+        if (!check(LexTokenType::KEYWORD))
+        {
+            return false;
+        }
+
+        return find(terminatorKeywords.begin(), terminatorKeywords.end(), currentToken.value)
+            != terminatorKeywords.end();
+    };
+
+    while (!atTerminator())
+    {
+        statements.push_back(parseStatement());
         skipEndOfLines();
     }
+
+    return make_shared<BlockStmt>(statements, blockLine);
+}
+
+StmtPtr Parser::parseIf()
+{
+    int stmtLine = currentToken.line;
+    expectKeyword("যদি");
+
+    Condition condition = parseCondition();
+
+    expectKeyword("তবে");
+
+    shared_ptr<BlockStmt> thenBlock = parseBlock({"নাহলে", "শেষ"});
+    shared_ptr<BlockStmt> elseBlock = nullptr;
 
     if (check(LexTokenType::KEYWORD) && checkValue("নাহলে"))
     {
         advance();
-        skipEndOfLines();
-
-        while (
-            !check(LexTokenType::END_OF_FILE) &&
-            !(check(LexTokenType::KEYWORD) && checkValue("শেষ"))
-        )
-        {
-            parseStatement();
-            skipEndOfLines();
-        }
+        elseBlock = parseBlock({"শেষ"});
     }
 
     expectKeyword("শেষ");
+
+    return make_shared<IfStmt>(condition, thenBlock, elseBlock, stmtLine);
 }
 
-void Parser::parseWhile()
+StmtPtr Parser::parseWhile()
 {
+    int stmtLine = currentToken.line;
     expectKeyword("যতক্ষণ");
 
-    parseCondition();
+    Condition condition = parseCondition();
 
     expectKeyword("করো");
 
-    skipEndOfLines();
-
-    while (
-        !check(LexTokenType::END_OF_FILE) &&
-        !(check(LexTokenType::KEYWORD) && checkValue("শেষ"))
-    )
-    {
-        parseStatement();
-        skipEndOfLines();
-    }
+    shared_ptr<BlockStmt> body = parseBlock({"শেষ"});
 
     expectKeyword("শেষ");
+
+    return make_shared<WhileStmt>(condition, body, stmtLine);
 }
 
-void Parser::parseCondition()
+Condition Parser::parseCondition()
 {
-    parseExpression();
+    Condition condition;
+
+    condition.left = parseExpression();
 
     if (
         check(LexTokenType::EQUAL) ||
@@ -254,6 +379,7 @@ void Parser::parseCondition()
         check(LexTokenType::LESS_EQUAL)
     )
     {
+        condition.op = currentToken.value;
         advance();
     }
     else
@@ -261,23 +387,31 @@ void Parser::parseCondition()
         error("Expected comparison operator");
     }
 
-    parseExpression();
+    condition.right = parseExpression();
+
+    return condition;
 }
 
-void Parser::parseExpression()
+ExprPtr Parser::parseExpression()
 {
-    parseTerm();
+    int startLine = currentToken.line;
+    ExprPtr left = parseTerm();
 
     while (check(LexTokenType::PLUS) || check(LexTokenType::MINUS))
     {
+        string op = currentToken.value;
         advance();
-        parseTerm();
+        ExprPtr right = parseTerm();
+        left = make_shared<BinaryExpr>(op, left, right, startLine);
     }
+
+    return left;
 }
 
-void Parser::parseTerm()
+ExprPtr Parser::parseTerm()
 {
-    parseFactor();
+    int startLine = currentToken.line;
+    ExprPtr left = parseFactor();
 
     while (
         check(LexTokenType::MULTIPLY) ||
@@ -285,42 +419,46 @@ void Parser::parseTerm()
         check(LexTokenType::MODULO)
     )
     {
+        string op = currentToken.value;
         advance();
-        parseFactor();
+        ExprPtr right = parseFactor();
+        left = make_shared<BinaryExpr>(op, left, right, startLine);
     }
+
+    return left;
 }
 
-void Parser::parseFactor()
+ExprPtr Parser::parseFactor()
 {
+    int ln = currentToken.line;
+
     if (check(LexTokenType::NUMBER))
     {
+        double value = strtod(currentToken.value.c_str(), nullptr);
         advance();
-        return;
+        return make_shared<NumberExpr>(value, ln);
     }
 
     if (check(LexTokenType::IDENTIFIER))
     {
-        if (!symbolTable.exists(currentToken.value))
-        {
-            error("Variable not declared before use: " + currentToken.value);
-        }
-
+        string name = currentToken.value;
         advance();
-        return;
+        return make_shared<VariableExpr>(name, ln);
     }
 
     if (check(LexTokenType::STRING))
     {
+        string value = currentToken.value;
         advance();
-        return;
+        return make_shared<StringExpr>(value, ln);
     }
 
     if (check(LexTokenType::LEFT_PAREN))
     {
         advance();
-        parseExpression();
+        ExprPtr inner = parseExpression();
         expect(LexTokenType::RIGHT_PAREN, "Expected ')'");
-        return;
+        return inner;
     }
 
     error("Expected number, identifier, string or expression");
